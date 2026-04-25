@@ -1,52 +1,173 @@
-import React, { useEffect, useRef, useState } from "react";
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>前世我叫什么</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
 
-const PLAY_SECONDS = 5;
-const RESULT_MAX_CHARS = 4;
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #0a0a0a;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      user-select: none;
+    }
 
-const LETTERS = [
-  "白", "子", "多", "鸡", "宝", "二", "黄", "八", "狗", "马", "大", "牛", "小", "鹿", "歌",
-  "黑", "王", "猫", "龙", "虎", "蛋", "皮", "花", "米", "瓜", "鸭", "羊", "鱼", "赵", "钱", "孙", "李",
-  "阿", "旺", "铁", "蛋", "翠", "兰", "胖", "球", "豆", "包", "福", "贵"
-];
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+    }
 
-const COLORS = [
-  "#ff3f77", "#ffcf3c", "#59e7d8", "#8cf14b", "#70a5ff", "#ffffff", "#d7d7d7", "#cc55ff",
-  "#ff9445", "#f25b5b", "#76ff6a", "#42d1ff", "#ffd1e8", "#b4ff5c", "#ff7bd5"
-];
+    .game-shell {
+      position: relative;
+      width: min(100vw - 24px, 430px);
+      aspect-ratio: 1180 / 2556;
+      max-height: 92vh;
+      overflow: hidden;
+      border-radius: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #000;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+    }
 
-export default function PastLifeNameCatcherGame() {
-  const canvasRef = useRef(null);
-  const gameRef = useRef(null);
-  const [hud, setHud] = useState({ phase: "ready", result: "", time: 0 });
+    #gameCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      display: block;
+    }
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
+    .hud {
+      position: absolute;
+      z-index: 10;
+      left: 0;
+      right: 0;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .hud-title {
+      font-weight: 700;
+    }
+
+    #restartBtn {
+      position: absolute;
+      z-index: 20;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
+      display: none;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      padding: 9px 20px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      cursor: pointer;
+    }
+
+    #restartBtn:active {
+      transform: translateX(-50%) scale(0.95);
+    }
+  </style>
+</head>
+<body>
+  <div class="game-shell" id="gameShell">
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="hud">
+      <span class="hud-title">复刻版 Demo</span>
+      <span id="hudTime">待开始</span>
+    </div>
+
+    <button id="restartBtn">再玩一次：随机名字</button>
+  </div>
+
+  <script>
+    const PLAY_SECONDS = 5;
+    const RESULT_MIN_CHARS = 2;
+    const RESULT_MAX_CHARS = 3;
+
+    const LETTERS = [
+      "白", "子", "多", "鸡", "宝", "二", "黄", "八", "狗", "马", "大", "牛", "小", "鹿", "歌",
+      "黑", "王", "猫", "龙", "虎", "蛋", "皮", "花", "米", "瓜", "鸭", "羊", "鱼", "赵", "钱", "孙", "李",
+      "阿", "旺", "铁", "蛋", "翠", "兰", "胖", "球", "豆", "包", "福", "贵"
+    ];
+
+    const COLORS = [
+      "#ff3f77", "#ffcf3c", "#59e7d8", "#8cf14b", "#70a5ff", "#ffffff", "#d7d7d7", "#cc55ff",
+      "#ff9445", "#f25b5b", "#76ff6a", "#42d1ff", "#ffd1e8", "#b4ff5c", "#ff7bd5"
+    ];
+
+    const shell = document.getElementById("gameShell");
+    const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
+    const hudTime = document.getElementById("hudTime");
+    const restartBtn = document.getElementById("restartBtn");
 
+    let game = null;
     let raf = 0;
     let last = performance.now();
     let hudTimer = 0;
 
     const rand = (min, max) => min + Math.random() * (max - min);
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    const easeOutCubic = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
-    const easeOutBack = (t) => {
+
+    function easeOutBack(t) {
       const c1 = 1.70158;
       const c3 = c1 + 1;
-      return 1 + c3 * Math.pow(clamp(t, 0, 1) - 1, 3) + c1 * Math.pow(clamp(t, 0, 1) - 1, 2);
-    };
+      t = clamp(t, 0, 1);
+      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
 
     function basketSize(w, h) {
       return {
-        // 篮子明显缩小，容量更少。
-        width: Math.min(86, w * 0.205),
-        height: Math.min(50, h * 0.059),
-        line: Math.max(7, Math.min(9, w * 0.02)),
+        // 篮子稍微大一点点，但最终名字控制在 2-3 个字。
+        width: Math.min(132, w * 0.31),
+        height: Math.min(68, h * 0.08),
+        line: Math.max(8, Math.min(10.5, w * 0.023)),
       };
     }
 
+    function updateHud() {
+      if (!game) return;
+
+      if (game.phase === "playing") {
+        hudTime.textContent = `${Math.max(0, PLAY_SECONDS - game.time).toFixed(1)}s`;
+        restartBtn.style.display = "none";
+      } else if (game.phase === "ending") {
+        hudTime.textContent = "结算";
+        restartBtn.textContent = `再玩一次：${game.result || "随机名字"}`;
+        restartBtn.style.display = "block";
+      } else {
+        hudTime.textContent = "待开始";
+        restartBtn.style.display = "none";
+      }
+    }
+
     function resize() {
-      const rect = canvas.parentElement.getBoundingClientRect();
+      const rect = shell.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
 
       canvas.width = Math.floor(rect.width * dpr);
@@ -55,31 +176,30 @@ export default function PastLifeNameCatcherGame() {
       canvas.style.height = `${rect.height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const g = gameRef.current;
-      if (!g) return;
+      if (!game) return;
 
-      g.w = rect.width;
-      g.h = rect.height;
-      g.groundY = rect.height * 0.858;
-      g.titleY = rect.height * 0.29;
+      game.w = rect.width;
+      game.h = rect.height;
+      game.groundY = rect.height * 0.858;
+      game.titleY = rect.height * 0.29;
 
-      const s = basketSize(g.w, g.h);
-      g.basket.width = s.width;
-      g.basket.height = s.height;
-      g.basket.line = s.line;
-      g.basket.y = g.groundY - 9;
-      g.basket.x = clamp(g.basket.x, g.basket.width / 2 + 18, g.w - g.basket.width / 2 - 18);
-      g.basket.targetX = clamp(g.basket.targetX, g.basket.width / 2 + 18, g.w - g.basket.width / 2 - 18);
-      g.basket.displayX = g.basket.displayX || g.basket.x;
-      g.basket.displayY = g.basket.displayY || g.basket.y;
+      const s = basketSize(game.w, game.h);
+      game.basket.width = s.width;
+      game.basket.height = s.height;
+      game.basket.line = s.line;
+      game.basket.y = game.groundY - 9;
+      game.basket.x = clamp(game.basket.x, game.basket.width / 2 + 18, game.w - game.basket.width / 2 - 18);
+      game.basket.targetX = clamp(game.basket.targetX, game.basket.width / 2 + 18, game.w - game.basket.width / 2 - 18);
+      game.basket.displayX = game.basket.displayX || game.basket.x;
+      game.basket.displayY = game.basket.displayY || game.basket.y;
     }
 
     function newGame() {
-      const rect = canvas.parentElement.getBoundingClientRect();
+      const rect = shell.getBoundingClientRect();
       const groundY = rect.height * 0.858;
       const s = basketSize(rect.width, rect.height);
 
-      gameRef.current = {
+      game = {
         w: rect.width,
         h: rect.height,
         groundY,
@@ -105,11 +225,10 @@ export default function PastLifeNameCatcherGame() {
         lineProgress: 0,
         lineY: 0,
         wipeDone: false,
-        extraDropped: false,
         showFinalText: false,
       };
 
-      setHud({ phase: "ready", result: "", time: 0 });
+      updateHud();
     }
 
     function randomLetter() {
@@ -117,7 +236,7 @@ export default function PastLifeNameCatcherGame() {
     }
 
     function makeLetter(ch, forcedX = null, opts = {}) {
-      const g = gameRef.current;
+      const g = game;
       const size = opts.size ?? Math.min(45, Math.max(33, g.w * 0.098));
       const r = size * 0.44;
       const x = forcedX ?? rand(r + 12, g.w - r - 12);
@@ -144,22 +263,20 @@ export default function PastLifeNameCatcherGame() {
     }
 
     function startGame() {
-      const g = gameRef.current;
-      if (!g || g.phase !== "ready") return;
+      if (!game || game.phase !== "ready") return;
 
-      g.phase = "playing";
-      g.time = 0;
-      g.letters = [];
-      g.nextSpawn = 0;
-      g.spawnCount = 0;
-      g.result = "";
-      g.endingTime = 0;
-      g.lineProgress = 0;
-      g.wipeDone = false;
-      g.extraDropped = false;
-      g.showFinalText = false;
+      game.phase = "playing";
+      game.time = 0;
+      game.letters = [];
+      game.nextSpawn = 0;
+      game.spawnCount = 0;
+      game.result = "";
+      game.endingTime = 0;
+      game.lineProgress = 0;
+      game.wipeDone = false;
+      game.showFinalText = false;
 
-      setHud({ phase: "playing", result: "", time: 0 });
+      updateHud();
     }
 
     function restart() {
@@ -168,7 +285,7 @@ export default function PastLifeNameCatcherGame() {
     }
 
     function spawn(dt) {
-      const g = gameRef.current;
+      const g = game;
       g.nextSpawn -= dt;
       if (g.nextSpawn > 0) return;
 
@@ -273,9 +390,9 @@ export default function PastLifeNameCatcherGame() {
       const bx = useDisplay ? b.displayX : b.x;
       const by = useDisplay ? b.displayY : b.y;
       return (
-        Math.abs(o.x - bx) < b.width * 0.46 &&
-        o.y > by - b.height * 1.15 &&
-        o.y < by + 15
+        Math.abs(o.x - bx) < b.width * 0.5 &&
+        o.y > by - b.height * 1.18 &&
+        o.y < by + 16
       );
     }
 
@@ -288,7 +405,12 @@ export default function PastLifeNameCatcherGame() {
 
           const dx = b.x - a.x;
           const dy = b.y - a.y;
-          const minD = a.r + b.r - 3.5;
+          const insideA = isInsideBasket(a, g);
+          const insideB = isInsideBasket(b, g);
+          const aroundBasket = insideA || insideB;
+
+          // 篮子里的字要留出更多间距，避免互相压住。
+          const minD = aroundBasket ? a.r + b.r + 4 : a.r + b.r - 3.5;
           const d2 = dx * dx + dy * dy;
           if (d2 <= 0.0001 || d2 > minD * minD) continue;
 
@@ -297,18 +419,17 @@ export default function PastLifeNameCatcherGame() {
           const ny = dy / d;
           const overlap = minD - d;
 
-          a.x -= nx * overlap * 0.62;
-          a.y -= ny * overlap * 0.62;
-          b.x += nx * overlap * 0.62;
-          b.y += ny * overlap * 0.62;
+          a.x -= nx * overlap * 0.7;
+          a.y -= ny * overlap * 0.7;
+          b.x += nx * overlap * 0.7;
+          b.y += ny * overlap * 0.7;
 
           const rvx = b.vx - a.vx;
           const rvy = b.vy - a.vy;
           const vn = rvx * nx + rvy * ny;
           if (vn >= 0) continue;
 
-          const aroundBasket = isInsideBasket(a, g) || isInsideBasket(b, g);
-          const bounce = aroundBasket ? 0.94 : 0.58;
+          const bounce = aroundBasket ? 0.98 : 0.58;
           const impulse = -(1 + bounce) * vn / 2;
 
           a.vx -= impulse * nx;
@@ -316,12 +437,12 @@ export default function PastLifeNameCatcherGame() {
           b.vx += impulse * nx;
           b.vy += impulse * ny;
 
-          // 篮子里有字时，下一个字砸上来会明显把里面的字顶起来。
+          // 篮子里有字时，下一个字砸上来会明显把里面的字顶起来，但不会重叠在一起。
           if (aroundBasket) {
-            a.vy -= 95;
-            b.vy -= 95;
-            a.vx += rand(-72, 72);
-            b.vx += rand(-72, 72);
+            a.vy -= 82;
+            b.vy -= 82;
+            a.vx += rand(-54, 54);
+            b.vx += rand(-54, 54);
           }
 
           a.av -= impulse * 0.018;
@@ -330,17 +451,62 @@ export default function PastLifeNameCatcherGame() {
       }
     }
 
+    function keepBasketLettersSeparated(g) {
+      if (g.phase !== "playing") return;
+
+      const b = g.basket;
+      const inside = g.letters
+        .filter((o) => !o.dead && !o.extra && !o.showcase && isInsideBasket(o, g, false))
+        .sort((a, b) => a.x - b.x);
+
+      if (inside.length <= 1) return;
+
+      // 篮子最终只适合装 2-3 个字。超过 3 个时，多出来的字会被轻轻弹出篮子，形成“装不下”的效果。
+      if (inside.length > RESULT_MAX_CHARS) {
+        for (let i = RESULT_MAX_CHARS; i < inside.length; i++) {
+          const o = inside[i];
+          const direction = o.x >= b.x ? 1 : -1;
+          o.vx += direction * 170;
+          o.vy -= 120;
+        }
+      }
+
+      const kept = inside.slice(0, RESULT_MAX_CHARS);
+      const gap = Math.min(42, Math.max(34, b.width / 2.85));
+      const start = -((kept.length - 1) * gap) / 2;
+      const targetY = b.y - b.height * 0.45;
+
+      kept.forEach((o, i) => {
+        const targetX = b.x + start + i * gap;
+        // 轻微吸附到篮子里的分隔位置，防止字与字重叠，同时保留物理抖动感。
+        o.vx += (targetX - o.x) * 7.8;
+        o.vy += (targetY - o.y) * 5.4;
+        o.x = clamp(o.x, b.x - b.width * 0.46, b.x + b.width * 0.46);
+        o.y = clamp(o.y, b.y - b.height * 0.86, b.y - b.height * 0.12);
+      });
+    }
+
     function extractResultFromBasket(g) {
       const caught = g.letters
         .filter((o) => !o.dead && !o.extra && isInsideBasket(o, g, false))
         .sort((a, b) => a.x - b.x);
 
-      // 篮子容量变小：最多保留 4 个字作为名字。
+      // 最终名字控制在 2-3 个字，避免结算展示时过挤。
       const selected = caught.slice(0, RESULT_MAX_CHARS);
 
-      // 如果完全没接到，为了游戏完整性，随机给 2-3 个字，但不是固定结果。
+      // 如果只接到 1 个字，补 1 个随机字；如果没接到，随机生成 2-3 个字。
+      while (selected.length > 0 && selected.length < RESULT_MIN_CHARS) {
+        selected.push(
+          makeLetter(randomLetter(), g.basket.x, {
+            y: g.basket.y - 30,
+            vx: 0,
+            vy: 0,
+          })
+        );
+      }
+
       if (selected.length === 0) {
-        const fallbackCount = Math.random() < 0.5 ? 2 : 3;
+        const fallbackCount = Math.random() < 0.5 ? RESULT_MIN_CHARS : RESULT_MAX_CHARS;
         return Array.from({ length: fallbackCount }, () => randomLetter());
       }
 
@@ -352,7 +518,6 @@ export default function PastLifeNameCatcherGame() {
       g.endingTime = 0;
       g.lineProgress = 0;
       g.wipeDone = false;
-      g.extraDropped = false;
       g.showFinalText = false;
 
       const b = g.basket;
@@ -388,25 +553,53 @@ export default function PastLifeNameCatcherGame() {
       });
 
       const showcase = g.letters.filter((o) => o.showcase).slice(0, resultChars.length);
-      const gap = Math.min(37, Math.max(30, g.w * 0.085));
-      const start = -((showcase.length - 1) * gap) / 2;
+
+      // 结算展示时按照每个字的实际视觉宽度排版，避免描边后的字互相重叠。
+      const count = Math.max(1, showcase.length);
+      const maxLayoutWidth = Math.min(g.w * 0.72, b.width * 1.86);
+      let finalFont = count === 1 ? 50 : Math.min(47, Math.max(31, maxLayoutWidth / (count * 1.18)));
+
+      function measureResultLayout(fontSize) {
+        ctx.save();
+        ctx.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        const strokePadding = Math.max(11, fontSize * 0.34);
+        const widths = resultChars.map((char) => ctx.measureText(char).width + strokePadding);
+        ctx.restore();
+
+        const gap = Math.max(10, fontSize * 0.22);
+        const totalWidth = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
+        return { widths, gap, totalWidth };
+      }
+
+      let layout = measureResultLayout(finalFont);
+      if (layout.totalWidth > maxLayoutWidth && count > 1) {
+        finalFont = Math.max(29, finalFont * (maxLayoutWidth / layout.totalWidth));
+        layout = measureResultLayout(finalFont);
+      }
+
+      let cursor = -layout.totalWidth / 2;
+      const centers = layout.widths.map((width) => {
+        const center = cursor + width / 2;
+        cursor += width + layout.gap;
+        return center;
+      });
 
       showcase.forEach((o, i) => {
         o.ch = resultChars[i];
-        o.font = Math.min(49, Math.max(37, g.w * 0.106));
-        o.r = o.font * 0.42;
+        o.font = finalFont;
+        o.r = finalFont * 0.34;
         o.color = COLORS[(i * 4 + 2) % COLORS.length];
         o.showcase = {
-          dx: start + i * gap,
-          dy: -b.height * 0.48,
+          dx: centers[i] ?? 0,
+          dy: -b.height * 0.5,
         };
       });
 
-      setHud({ phase: "ending", result: g.result, time: g.time });
+      updateHud();
     }
 
     function update(dt) {
-      const g = gameRef.current;
+      const g = game;
       if (!g) return;
       dt = Math.min(dt, 1 / 24);
 
@@ -441,29 +634,15 @@ export default function PastLifeNameCatcherGame() {
           g.lineProgress = clamp((g.endingTime - 0.48) / 0.46, 0, 1);
         }
 
-        // 线扫过后，删除篮子以上的字，保留底部没接住的字堆。
+        // 线扫过后，直接清除所有多余字，只保留最终名字。
         if (!g.wipeDone && g.lineProgress > 0.76) {
           g.wipeDone = true;
           g.letters.forEach((o) => {
-            if (!o.showcase && o.y < g.lineY + 5) o.dead = true;
+            if (!o.showcase) o.dead = true;
           });
         }
 
-        // 清场后额外掉一个“多余字”，撞线/撞篮子/撞地面后弹开。
-        if (!g.extraDropped && g.lineProgress > 0.92) {
-          g.extraDropped = true;
-          const extra = makeLetter(randomLetter(), b.displayX + b.width * 0.92, {
-            y: g.lineY - 126,
-            vx: -115,
-            vy: 75,
-            size: Math.min(47, Math.max(35, g.w * 0.102)),
-            color: COLORS[Math.floor(rand(0, COLORS.length))],
-            extra: true,
-          });
-          g.letters.push(extra);
-        }
-
-        if (g.endingTime > 1.6) {
+        if (g.endingTime > 1.35) {
           g.showFinalText = true;
         }
       }
@@ -480,11 +659,15 @@ export default function PastLifeNameCatcherGame() {
         if (g.phase === "ending" && o.showcase) {
           const targetX = b.displayX + o.showcase.dx;
           const targetY = b.displayY + o.showcase.dy;
-          o.x += (targetX - o.x) * Math.min(1, dt * 13);
-          o.y += (targetY - o.y) * Math.min(1, dt * 13);
+          o.x += (targetX - o.x) * Math.min(1, dt * 16);
+          o.y += (targetY - o.y) * Math.min(1, dt * 16);
           o.vx = 0;
           o.vy = 0;
-          o.angle *= 0.9;
+          o.angle *= 0.82;
+
+          // 接近目标位置后直接锁定，防止最终展示阶段字之间因为缓动残留而视觉重叠。
+          if (Math.abs(o.x - targetX) < 0.8) o.x = targetX;
+          if (Math.abs(o.y - targetY) < 0.8) o.y = targetY;
           continue;
         }
 
@@ -520,22 +703,6 @@ export default function PastLifeNameCatcherGame() {
           o.av *= 0.72;
         }
 
-        // 结算横线也有碰撞，额外字碰到线会弹开。
-        if (g.phase === "ending" && g.lineProgress > 0.72 && o.extra) {
-          const lineStartX = g.w - g.w * g.lineProgress;
-          const hitLine =
-            o.x > lineStartX &&
-            o.y + o.r > g.lineY - 3 &&
-            o.y - o.r < g.lineY + 8;
-
-          if (hitLine) {
-            o.y = g.lineY - o.r - 5;
-            o.vy = -Math.abs(o.vy) * 0.62 - 92;
-            o.vx += rand(-100, 20);
-            o.av += rand(-1.6, 1.6);
-          }
-        }
-
         const basketX = g.phase === "ending" ? b.displayX : b.x;
         const basketY = g.phase === "ending" ? b.displayY : b.y;
         const nearBasket =
@@ -551,12 +718,14 @@ export default function PastLifeNameCatcherGame() {
       }
 
       const activeLetters = g.letters.filter((o) => !o.dead);
-      for (let k = 0; k < 4; k++) resolveLetterPairs(activeLetters, g);
+      for (let k = 0; k < 5; k++) resolveLetterPairs(activeLetters, g);
+      keepBasketLettersSeparated(g);
 
       // 保留地面字堆、展示字、额外字；限制数量避免卡顿。
       g.letters = g.letters.filter((o, idx) => {
         if (o.dead) return false;
         if (o.showcase || o.extra) return true;
+        if (g.phase === "ending") return false;
         return idx > g.letters.length - 70;
       });
     }
@@ -666,7 +835,7 @@ export default function PastLifeNameCatcherGame() {
     }
 
     function draw() {
-      const g = gameRef.current;
+      const g = game;
       if (!g) return;
 
       ctx.clearRect(0, 0, g.w, g.h);
@@ -747,15 +916,9 @@ export default function PastLifeNameCatcherGame() {
       draw();
 
       hudTimer += dt;
-      const g = gameRef.current;
-      if (g && hudTimer > 0.15) {
+      if (game && hudTimer > 0.15) {
         hudTimer = 0;
-        setHud((prev) => {
-          if (prev.phase === g.phase && prev.result === g.result && Math.abs(prev.time - g.time) < 0.12) {
-            return prev;
-          }
-          return { phase: g.phase, result: g.result, time: g.time };
-        });
+        updateHud();
       }
 
       raf = requestAnimationFrame(tick);
@@ -766,50 +929,48 @@ export default function PastLifeNameCatcherGame() {
       return e.clientX - rect.left;
     }
 
-    const onPointerDown = (e) => {
+    function onPointerDown(e) {
       e.preventDefault();
-      const g = gameRef.current;
-      if (!g) return;
+      if (!game) return;
 
-      if (g.phase === "ready") startGame();
-      else if (g.phase === "ending") restart();
+      if (game.phase === "ready") startGame();
+      else if (game.phase === "ending") restart();
 
-      if (g.phase === "playing") {
-        g.pointerDown = true;
-        g.basket.targetX = pointerX(e);
+      if (game.phase === "playing") {
+        game.pointerDown = true;
+        game.basket.targetX = pointerX(e);
       }
-    };
+    }
 
-    const onPointerMove = (e) => {
-      const g = gameRef.current;
-      if (!g || g.phase !== "playing") return;
-      if (!g.pointerDown && e.buttons !== 1) return;
+    function onPointerMove(e) {
+      if (!game || game.phase !== "playing") return;
+      if (!game.pointerDown && e.buttons !== 1) return;
 
       e.preventDefault();
-      g.basket.targetX = pointerX(e);
-    };
+      game.basket.targetX = pointerX(e);
+    }
 
-    const onPointerUp = () => {
-      const g = gameRef.current;
-      if (g) g.pointerDown = false;
-    };
+    function onPointerUp() {
+      if (game) game.pointerDown = false;
+    }
 
-    const onKey = (e) => {
-      const g = gameRef.current;
-      if (!g) return;
+    function onKey(e) {
+      if (!game) return;
 
       if (e.code === "Space" || e.code === "Enter") {
-        if (g.phase === "ready") startGame();
-        else if (g.phase === "ending") restart();
+        if (game.phase === "ready") startGame();
+        else if (game.phase === "ending") restart();
       }
 
-      if (g.phase !== "playing") return;
-      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") g.basket.targetX -= 40;
-      if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") g.basket.targetX += 40;
-    };
+      if (game.phase !== "playing") return;
+      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") game.basket.targetX -= 40;
+      if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") game.basket.targetX += 40;
+    }
 
-    newGame();
-    resize();
+    restartBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      restart();
+    });
 
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", onKey);
@@ -818,49 +979,9 @@ export default function PastLifeNameCatcherGame() {
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
 
+    newGame();
+    resize();
     raf = requestAnimationFrame(tick);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
-      window.removeEventListener("keydown", onKey);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, []);
-
-  return (
-    <div className="min-h-screen w-full bg-neutral-950 flex items-center justify-center p-3 select-none">
-      <div className="relative w-full max-w-[430px] aspect-[1180/2556] max-h-[92vh] rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl bg-black">
-        <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
-
-        <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between px-4 py-3 text-white/80 text-sm pointer-events-none">
-          <span className="font-semibold">复刻版 Demo</span>
-          <span>
-            {hud.phase === "playing"
-              ? `${Math.max(0, PLAY_SECONDS - hud.time).toFixed(1)}s`
-              : hud.phase === "ending"
-                ? "结算"
-                : "待开始"}
-          </span>
-        </div>
-
-        {hud.phase === "ending" && (
-          <button
-            className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/12 px-5 py-2 text-sm font-bold text-white backdrop-blur-md border border-white/20 active:scale-95"
-            onClick={(e) => {
-              e.stopPropagation();
-              const ev = new KeyboardEvent("keydown", { code: "Enter" });
-              window.dispatchEvent(ev);
-            }}
-          >
-            再玩一次：{hud.result || "随机名字"}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
+  </script>
+</body>
+</html>
