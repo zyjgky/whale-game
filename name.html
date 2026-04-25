@@ -97,7 +97,7 @@
     <canvas id="gameCanvas"></canvas>
 
     <div class="hud">
-      <span class="hud-title">复刻版 Demo</span>
+      <span class="hud-title">妞妞测试版</span>
       <span id="hudTime">待开始</span>
     </div>
 
@@ -108,6 +108,7 @@
     const PLAY_SECONDS = 5;
     const RESULT_MIN_CHARS = 2;
     const RESULT_MAX_CHARS = 3;
+    const BASKET_CAPACITY = 3;
 
     const LETTERS = [
       "白", "子", "多", "鸡", "宝", "二", "黄", "八", "狗", "马", "大", "牛", "小", "鹿", "歌",
@@ -134,16 +135,18 @@
     const rand = (min, max) => min + Math.random() * (max - min);
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-    function easeOutBack(t) {
-      const c1 = 1.70158;
-      const c3 = c1 + 1;
+    function easeInOutCubic(t) {
       t = clamp(t, 0, 1);
-      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function easeOutCubic(t) {
+      t = clamp(t, 0, 1);
+      return 1 - Math.pow(1 - t, 3);
     }
 
     function basketSize(w, h) {
       return {
-        // 篮子稍微大一点点，但最终名字控制在 2-3 个字。
         width: Math.min(132, w * 0.31),
         height: Math.min(68, h * 0.08),
         line: Math.max(8, Math.min(10.5, w * 0.023)),
@@ -258,6 +261,7 @@
         av: rand(-0.85, 0.85),
         showcase: false,
         extra: !!opts.extra,
+        pushed: false,
         dead: false,
       };
     }
@@ -293,7 +297,6 @@
       let batch = 1;
       let interval = 0.56;
 
-      // 正常速度：不是特别慢，也不像前一版那么密集。
       if (t > 1.5) {
         batch = Math.random() < 0.34 ? 2 : 1;
         interval = 0.38;
@@ -326,7 +329,6 @@
       const w = b.width;
       const h = b.height;
 
-      // U 形框：两侧外扩，底部较窄，小篮子更容易漏字。
       return [
         { ax: x - w / 2, ay: y, bx: x + w / 2, by: y, type: "base" },
         { ax: x - w / 2, ay: y, bx: x - w * 0.66, by: y - h, type: "left" },
@@ -374,7 +376,6 @@
           o.vx -= vt * (1 - friction) * tx;
           o.vy -= vt * (1 - friction) * ty;
 
-          // 撞到斜边后增加横向弹开/滑入效果。
           o.vx += tx * rand(-34, 34);
           o.av += vt * 0.015 + rand(-0.72, 0.72);
         }
@@ -391,9 +392,41 @@
       const by = useDisplay ? b.displayY : b.y;
       return (
         Math.abs(o.x - bx) < b.width * 0.5 &&
-        o.y > by - b.height * 1.18 &&
-        o.y < by + 16
+        o.y > by - b.height * 0.98 &&
+        o.y < by + 12
       );
+    }
+
+    function basketSlots(count, b) {
+      const side = Math.min(38, b.width * 0.265);
+      const bottomY = -b.height * 0.28;
+      const topY = -b.height * 0.68;
+
+      if (count <= 1) {
+        return [{ dx: 0, dy: -b.height * 0.46 }];
+      }
+      if (count === 2) {
+        return [
+          { dx: -side * 0.92, dy: -b.height * 0.39 },
+          { dx: side * 0.92, dy: -b.height * 0.39 },
+        ];
+      }
+      return [
+        { dx: -side, dy: bottomY },
+        { dx: side, dy: bottomY },
+        { dx: 0, dy: topY },
+      ];
+    }
+
+    function pickBasketLetters(g) {
+      const b = g.basket;
+      return g.letters
+        .filter((o) => !o.dead && !o.extra && !o.pushed && !o.showcase && isInsideBasket(o, g, false))
+        .sort((a, c) => {
+          const da = Math.abs(a.x - b.x) + Math.abs(a.y - (b.y - b.height * 0.45));
+          const dc = Math.abs(c.x - b.x) + Math.abs(c.y - (b.y - b.height * 0.45));
+          return da - dc;
+        });
     }
 
     function resolveLetterPairs(list, g) {
@@ -409,8 +442,7 @@
           const insideB = isInsideBasket(b, g);
           const aroundBasket = insideA || insideB;
 
-          // 篮子里的字要留出更多间距，避免互相压住。
-          const minD = aroundBasket ? a.r + b.r + 4 : a.r + b.r - 3.5;
+          const minD = aroundBasket ? a.r + b.r + 7 : a.r + b.r - 2.5;
           const d2 = dx * dx + dy * dy;
           if (d2 <= 0.0001 || d2 > minD * minD) continue;
 
@@ -419,17 +451,17 @@
           const ny = dy / d;
           const overlap = minD - d;
 
-          a.x -= nx * overlap * 0.7;
-          a.y -= ny * overlap * 0.7;
-          b.x += nx * overlap * 0.7;
-          b.y += ny * overlap * 0.7;
+          a.x -= nx * overlap * 0.76;
+          a.y -= ny * overlap * 0.76;
+          b.x += nx * overlap * 0.76;
+          b.y += ny * overlap * 0.76;
 
           const rvx = b.vx - a.vx;
           const rvy = b.vy - a.vy;
           const vn = rvx * nx + rvy * ny;
           if (vn >= 0) continue;
 
-          const bounce = aroundBasket ? 0.98 : 0.58;
+          const bounce = aroundBasket ? 0.9 : 0.58;
           const impulse = -(1 + bounce) * vn / 2;
 
           a.vx -= impulse * nx;
@@ -437,12 +469,11 @@
           b.vx += impulse * nx;
           b.vy += impulse * ny;
 
-          // 篮子里有字时，下一个字砸上来会明显把里面的字顶起来，但不会重叠在一起。
           if (aroundBasket) {
-            a.vy -= 82;
-            b.vy -= 82;
-            a.vx += rand(-54, 54);
-            b.vx += rand(-54, 54);
+            a.vy -= 64;
+            b.vy -= 64;
+            a.vx += rand(-44, 44);
+            b.vx += rand(-44, 44);
           }
 
           a.av -= impulse * 0.018;
@@ -451,66 +482,107 @@
       }
     }
 
+    function forceSeparate(list, gap = 8) {
+      for (let loop = 0; loop < 8; loop++) {
+        for (let i = 0; i < list.length; i++) {
+          for (let j = i + 1; j < list.length; j++) {
+            const a = list[i];
+            const b = list[j];
+            const minD = a.r + b.r + gap;
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            let d = Math.hypot(dx, dy);
+            if (d >= minD) continue;
+
+            if (d < 0.001) {
+              dx = rand(-1, 1);
+              dy = rand(-1, 1);
+              d = Math.hypot(dx, dy) || 1;
+            }
+
+            const nx = dx / d;
+            const ny = dy / d;
+            const overlap = minD - d;
+            a.x -= nx * overlap * 0.5;
+            a.y -= ny * overlap * 0.5;
+            b.x += nx * overlap * 0.5;
+            b.y += ny * overlap * 0.5;
+          }
+        }
+      }
+    }
+
     function keepBasketLettersSeparated(g) {
       if (g.phase !== "playing") return;
 
       const b = g.basket;
-      const inside = g.letters
-        .filter((o) => !o.dead && !o.extra && !o.showcase && isInsideBasket(o, g, false))
-        .sort((a, b) => a.x - b.x);
+      const inside = pickBasketLetters(g);
+      if (inside.length === 0) return;
 
-      if (inside.length <= 1) return;
+      const kept = inside.slice(0, BASKET_CAPACITY).sort((a, b) => a.x - b.x);
+      const overflow = inside.slice(BASKET_CAPACITY);
 
-      // 篮子最终只适合装 2-3 个字。超过 3 个时，多出来的字会被轻轻弹出篮子，形成“装不下”的效果。
-      if (inside.length > RESULT_MAX_CHARS) {
-        for (let i = RESULT_MAX_CHARS; i < inside.length; i++) {
-          const o = inside[i];
-          const direction = o.x >= b.x ? 1 : -1;
-          o.vx += direction * 170;
-          o.vy -= 120;
-        }
-      }
+      overflow.forEach((o, i) => {
+        const direction = o.x >= b.x ? 1 : -1;
+        o.pushed = true;
+        o.vx += direction * rand(190, 280);
+        o.vy -= rand(120, 210);
+        o.av += direction * rand(2.2, 4.5);
+      });
 
-      const kept = inside.slice(0, RESULT_MAX_CHARS);
-      const gap = Math.min(42, Math.max(34, b.width / 2.85));
-      const start = -((kept.length - 1) * gap) / 2;
-      const targetY = b.y - b.height * 0.45;
-
+      const slots = basketSlots(kept.length, b);
       kept.forEach((o, i) => {
-        const targetX = b.x + start + i * gap;
-        // 轻微吸附到篮子里的分隔位置，防止字与字重叠，同时保留物理抖动感。
-        o.vx += (targetX - o.x) * 7.8;
-        o.vy += (targetY - o.y) * 5.4;
-        o.x = clamp(o.x, b.x - b.width * 0.46, b.x + b.width * 0.46);
-        o.y = clamp(o.y, b.y - b.height * 0.86, b.y - b.height * 0.12);
+        const targetX = b.x + slots[i].dx;
+        const targetY = b.y + slots[i].dy;
+
+        o.vx += (targetX - o.x) * 8.8;
+        o.vy += (targetY - o.y) * 7.2;
+        o.vx *= 0.88;
+        o.vy *= 0.9;
+        o.av *= 0.76;
+
+        o.x = clamp(o.x, b.x - b.width * 0.48, b.x + b.width * 0.48);
+        o.y = clamp(o.y, b.y - b.height * 0.88, b.y - b.height * 0.12);
+      });
+
+      forceSeparate(kept, 10);
+
+      kept.forEach((o) => {
+        o.x = clamp(o.x, b.x - b.width * 0.49, b.x + b.width * 0.49);
+        o.y = clamp(o.y, b.y - b.height * 0.9, b.y - b.height * 0.1);
       });
     }
 
     function extractResultFromBasket(g) {
-      const caught = g.letters
-        .filter((o) => !o.dead && !o.extra && isInsideBasket(o, g, false))
+      const caught = pickBasketLetters(g)
+        .slice(0, RESULT_MAX_CHARS)
         .sort((a, b) => a.x - b.x);
 
-      // 最终名字控制在 2-3 个字，避免结算展示时过挤。
       const selected = caught.slice(0, RESULT_MAX_CHARS);
 
-      // 如果只接到 1 个字，补 1 个随机字；如果没接到，随机生成 2-3 个字。
       while (selected.length > 0 && selected.length < RESULT_MIN_CHARS) {
         selected.push(
           makeLetter(randomLetter(), g.basket.x, {
-            y: g.basket.y - 30,
+            y: g.basket.y - g.basket.height * 0.46,
             vx: 0,
             vy: 0,
+            size: Math.min(40, Math.max(32, g.w * 0.09)),
           })
         );
       }
 
       if (selected.length === 0) {
         const fallbackCount = Math.random() < 0.5 ? RESULT_MIN_CHARS : RESULT_MAX_CHARS;
-        return Array.from({ length: fallbackCount }, () => randomLetter());
+        return {
+          chars: Array.from({ length: fallbackCount }, () => randomLetter()),
+          selected: [],
+        };
       }
 
-      return selected.map((o) => o.ch);
+      return {
+        chars: selected.map((o) => o.ch),
+        selected,
+      };
     }
 
     function prepareEnding(g) {
@@ -524,78 +596,75 @@
       b.displayX = b.x;
       b.displayY = b.y;
 
-      const resultChars = extractResultFromBasket(g);
+      const { chars: resultChars, selected } = extractResultFromBasket(g);
       g.result = resultChars.join("");
 
-      const caught = g.letters
-        .filter((o) => !o.dead && !o.extra && isInsideBasket(o, g, false))
-        .sort((a, b) => a.x - b.x)
-        .slice(0, resultChars.length);
-
-      const usedIds = new Set();
+      const selectedIds = new Set();
       resultChars.forEach((char, i) => {
-        let target = caught.find((o) => o.ch === char && !usedIds.has(o.id));
-        if (!target) target = caught[i];
-
-        if (target) {
-          target.showcase = true;
-          usedIds.add(target.id);
-        } else {
-          const letter = makeLetter(char, b.x, {
-            y: b.y - 30,
+        let target = selected[i];
+        if (!target) {
+          target = makeLetter(char, b.x, {
+            y: b.y - b.height * 0.45,
             vx: 0,
             vy: 0,
-            size: Math.min(46, Math.max(37, g.w * 0.102)),
+            size: Math.min(40, Math.max(32, g.w * 0.09)),
           });
-          letter.showcase = true;
-          g.letters.push(letter);
+          g.letters.push(target);
         }
+
+        target.ch = char;
+        target.showcase = true;
+        target.pushed = false;
+        target.dead = false;
+        selectedIds.add(target.id);
       });
 
       const showcase = g.letters.filter((o) => o.showcase).slice(0, resultChars.length);
-
-      // 结算展示时按照每个字的实际视觉宽度排版，避免描边后的字互相重叠。
-      const count = Math.max(1, showcase.length);
-      const maxLayoutWidth = Math.min(g.w * 0.72, b.width * 1.86);
-      let finalFont = count === 1 ? 50 : Math.min(47, Math.max(31, maxLayoutWidth / (count * 1.18)));
-
-      function measureResultLayout(fontSize) {
-        ctx.save();
-        ctx.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
-        const strokePadding = Math.max(11, fontSize * 0.34);
-        const widths = resultChars.map((char) => ctx.measureText(char).width + strokePadding);
-        ctx.restore();
-
-        const gap = Math.max(10, fontSize * 0.22);
-        const totalWidth = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
-        return { widths, gap, totalWidth };
-      }
-
-      let layout = measureResultLayout(finalFont);
-      if (layout.totalWidth > maxLayoutWidth && count > 1) {
-        finalFont = Math.max(29, finalFont * (maxLayoutWidth / layout.totalWidth));
-        layout = measureResultLayout(finalFont);
-      }
-
-      let cursor = -layout.totalWidth / 2;
-      const centers = layout.widths.map((width) => {
-        const center = cursor + width / 2;
-        cursor += width + layout.gap;
-        return center;
-      });
+      const slots = basketSlots(showcase.length, b);
+      const finalFont = Math.min(39, Math.max(30, g.w * 0.088));
 
       showcase.forEach((o, i) => {
         o.ch = resultChars[i];
         o.font = finalFont;
-        o.r = finalFont * 0.34;
+        o.r = finalFont * 0.37;
         o.color = COLORS[(i * 4 + 2) % COLORS.length];
+        o.angle *= 0.45;
         o.showcase = {
-          dx: centers[i] ?? 0,
-          dy: -b.height * 0.5,
+          dx: slots[i].dx,
+          dy: slots[i].dy,
         };
       });
 
       updateHud();
+    }
+
+    function pushOverflowAboveBasket(g) {
+      const b = g.basket;
+      const bx = b.displayX;
+      const by = b.displayY;
+      const basketTop = by - b.height;
+
+      g.letters.forEach((o) => {
+        if (o.dead || o.showcase) return;
+
+        const aroundRaisedBasket =
+          Math.abs(o.x - bx) < b.width * 1.25 &&
+          o.y < by + 10 &&
+          o.y > basketTop - b.height * 1.25;
+
+        const aboveBasketHeight = o.y + o.r * 0.2 < basketTop;
+        const stackedTooHighNearBasket = aroundRaisedBasket && o.y < basketTop + o.r * 0.65;
+
+        // 只推掉篮子高度以上、或结算时仍挤在篮子口上方的多余字。
+        // 已经落在地面上的字不会被删除，继续保留在画面底部。
+        if (aboveBasketHeight || stackedTooHighNearBasket || aroundRaisedBasket) {
+          o.pushed = true;
+          const direction = o.x < bx ? -1 : 1;
+          o.vx = direction * rand(320, 520);
+          o.vy = -rand(220, 380);
+          o.av += direction * rand(4.5, 7.5);
+        }
+      });
     }
 
     function update(dt) {
@@ -621,28 +690,24 @@
       if (g.phase === "ending") {
         g.endingTime += dt;
 
-        // 5 秒结束后篮子抬到中央偏下。
-        const liftEase = easeOutBack(g.endingTime / 0.76);
+        // 篮子抬升改慢：从 0.76s 延长到 1.55s，使用 easeInOutCubic，避免突然冲到中央。
+        const liftEase = easeInOutCubic(g.endingTime / 1.55);
         b.displayX = b.x + (g.w * 0.5 - b.x) * liftEase;
         b.displayY = b.y + (g.h * 0.565 - b.y) * liftEase;
 
-        // 横线和篮子上沿高度基本持平。
         g.lineY = b.displayY - b.height * 1.02;
 
-        // 从右边滑出一根线。
-        if (g.endingTime > 0.48) {
-          g.lineProgress = clamp((g.endingTime - 0.48) / 0.46, 0, 1);
+        // 横线等篮子快到中央时再出现，视觉上像把篮子高度以上的字扫掉。
+        if (g.endingTime > 1.08) {
+          g.lineProgress = easeOutCubic((g.endingTime - 1.08) / 0.82);
         }
 
-        // 线扫过后，直接清除所有多余字，只保留最终名字。
-        if (!g.wipeDone && g.lineProgress > 0.76) {
+        if (!g.wipeDone && g.lineProgress > 0.58) {
           g.wipeDone = true;
-          g.letters.forEach((o) => {
-            if (!o.showcase) o.dead = true;
-          });
+          pushOverflowAboveBasket(g);
         }
 
-        if (g.endingTime > 1.35) {
+        if (g.endingTime > 2.15) {
           g.showFinalText = true;
         }
       }
@@ -659,25 +724,24 @@
         if (g.phase === "ending" && o.showcase) {
           const targetX = b.displayX + o.showcase.dx;
           const targetY = b.displayY + o.showcase.dy;
-          o.x += (targetX - o.x) * Math.min(1, dt * 16);
-          o.y += (targetY - o.y) * Math.min(1, dt * 16);
+          o.x += (targetX - o.x) * Math.min(1, dt * 10.5);
+          o.y += (targetY - o.y) * Math.min(1, dt * 10.5);
           o.vx = 0;
           o.vy = 0;
           o.angle *= 0.82;
 
-          // 接近目标位置后直接锁定，防止最终展示阶段字之间因为缓动残留而视觉重叠。
-          if (Math.abs(o.x - targetX) < 0.8) o.x = targetX;
-          if (Math.abs(o.y - targetY) < 0.8) o.y = targetY;
+          if (Math.abs(o.x - targetX) < 0.55) o.x = targetX;
+          if (Math.abs(o.y - targetY) < 0.55) o.y = targetY;
           continue;
         }
 
         o.vy += gravity * dt;
-        o.vx *= Math.pow(0.993, dt * 60);
+        o.vx *= Math.pow(o.pushed ? 0.986 : 0.993, dt * 60);
         o.vy *= Math.pow(0.999, dt * 60);
         o.x += o.vx * dt;
         o.y += o.vy * dt;
         o.angle += o.av * dt;
-        o.angle = clamp(o.angle, -0.24, 0.24);
+        o.angle = clamp(o.angle, -0.28, 0.28);
         o.av *= Math.pow(0.93, dt * 60);
 
         if (o.x - o.r < 6) {
@@ -689,7 +753,6 @@
           o.vx = -Math.abs(o.vx) * 0.62;
         }
 
-        // 地面反弹更明显：落地弹起一小段，再带阻尼滑动停下。
         if (o.y + o.r > g.groundY) {
           o.y = g.groundY - o.r;
           if (Math.abs(o.vy) > 30) {
@@ -706,6 +769,7 @@
         const basketX = g.phase === "ending" ? b.displayX : b.x;
         const basketY = g.phase === "ending" ? b.displayY : b.y;
         const nearBasket =
+          !o.pushed &&
           o.y + o.r > basketY - b.height - 38 &&
           o.y - o.r < basketY + 34 &&
           Math.abs(o.x - basketX) < b.width * 1.05;
@@ -718,15 +782,18 @@
       }
 
       const activeLetters = g.letters.filter((o) => !o.dead);
-      for (let k = 0; k < 5; k++) resolveLetterPairs(activeLetters, g);
+      for (let k = 0; k < 6; k++) resolveLetterPairs(activeLetters, g);
       keepBasketLettersSeparated(g);
 
-      // 保留地面字堆、展示字、额外字；限制数量避免卡顿。
+      // 关键修改：结算阶段不再删除地面字。只清理已经飞出画面的 pushed 字。
       g.letters = g.letters.filter((o, idx) => {
         if (o.dead) return false;
+        if (g.phase === "ending") {
+          if (o.pushed && (o.x < -90 || o.x > g.w + 90 || o.y < -120 || o.y > g.h + 120)) return false;
+          return true;
+        }
         if (o.showcase || o.extra) return true;
-        if (g.phase === "ending") return false;
-        return idx > g.letters.length - 70;
+        return idx > g.letters.length - 82;
       });
     }
 
@@ -819,7 +886,7 @@
       if (!g.showFinalText || !g.result) return;
 
       const b = g.basket;
-      const y = b.displayY + b.height * 0.72;
+      const y = b.displayY + b.height * 0.76;
 
       ctx.save();
       ctx.textAlign = "center";
@@ -859,6 +926,7 @@
       ctx.stroke();
       ctx.restore();
 
+      // 普通字先画，结算后地上的字仍然保留在底部。
       for (const o of g.letters) {
         if (o.showcase || o.dead) continue;
         drawTextSticker(o.ch, o.x, o.y, o.font, o.color, o.angle);
@@ -866,7 +934,6 @@
 
       drawBasket(g, g.phase === "ending");
 
-      // 从右边滑出的横线：高度与篮子上沿持平，用来切掉篮子以上的多余字。
       if (g.phase === "ending" && g.lineProgress > 0.01) {
         const x0 = g.w - g.w * g.lineProgress;
         ctx.save();
@@ -885,6 +952,7 @@
         drawFinalLabel(g);
       }
 
+      // 最终保留在篮子里的字：使用三角堆叠位，不允许互相盖住。
       for (const o of g.letters) {
         if (!o.showcase || o.dead) continue;
         drawTextSticker(o.ch, o.x, o.y, o.font, o.color, o.angle);
