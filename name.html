@@ -1,1 +1,866 @@
+import React, { useEffect, useRef, useState } from "react";
+
+const PLAY_SECONDS = 5;
+const RESULT_MAX_CHARS = 4;
+
+const LETTERS = [
+  "白", "子", "多", "鸡", "宝", "二", "黄", "八", "狗", "马", "大", "牛", "小", "鹿", "歌",
+  "黑", "王", "猫", "龙", "虎", "蛋", "皮", "花", "米", "瓜", "鸭", "羊", "鱼", "赵", "钱", "孙", "李",
+  "阿", "旺", "铁", "蛋", "翠", "兰", "胖", "球", "豆", "包", "福", "贵"
+];
+
+const COLORS = [
+  "#ff3f77", "#ffcf3c", "#59e7d8", "#8cf14b", "#70a5ff", "#ffffff", "#d7d7d7", "#cc55ff",
+  "#ff9445", "#f25b5b", "#76ff6a", "#42d1ff", "#ffd1e8", "#b4ff5c", "#ff7bd5"
+];
+
+export default function PastLifeNameCatcherGame() {
+  const canvasRef = useRef(null);
+  const gameRef = useRef(null);
+  const [hud, setHud] = useState({ phase: "ready", result: "", time: 0 });
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    let raf = 0;
+    let last = performance.now();
+    let hudTimer = 0;
+
+    const rand = (min, max) => min + Math.random() * (max - min);
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const easeOutCubic = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+    const easeOutBack = (t) => {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * Math.pow(clamp(t, 0, 1) - 1, 3) + c1 * Math.pow(clamp(t, 0, 1) - 1, 2);
+    };
+
+    function basketSize(w, h) {
+      return {
+        // 篮子明显缩小，容量更少。
+        width: Math.min(86, w * 0.205),
+        height: Math.min(50, h * 0.059),
+        line: Math.max(7, Math.min(9, w * 0.02)),
+      };
+    }
+
+    function resize() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = Math.floor(rect.width * dpr);
+      canvas.height = Math.floor(rect.height * dpr);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const g = gameRef.current;
+      if (!g) return;
+
+      g.w = rect.width;
+      g.h = rect.height;
+      g.groundY = rect.height * 0.858;
+      g.titleY = rect.height * 0.29;
+
+      const s = basketSize(g.w, g.h);
+      g.basket.width = s.width;
+      g.basket.height = s.height;
+      g.basket.line = s.line;
+      g.basket.y = g.groundY - 9;
+      g.basket.x = clamp(g.basket.x, g.basket.width / 2 + 18, g.w - g.basket.width / 2 - 18);
+      g.basket.targetX = clamp(g.basket.targetX, g.basket.width / 2 + 18, g.w - g.basket.width / 2 - 18);
+      g.basket.displayX = g.basket.displayX || g.basket.x;
+      g.basket.displayY = g.basket.displayY || g.basket.y;
+    }
+
+    function newGame() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const groundY = rect.height * 0.858;
+      const s = basketSize(rect.width, rect.height);
+
+      gameRef.current = {
+        w: rect.width,
+        h: rect.height,
+        groundY,
+        titleY: rect.height * 0.29,
+        time: 0,
+        phase: "ready",
+        letters: [],
+        nextSpawn: 0,
+        spawnCount: 0,
+        result: "",
+        pointerDown: false,
+        basket: {
+          x: rect.width * 0.5,
+          targetX: rect.width * 0.5,
+          y: groundY - 9,
+          width: s.width,
+          height: s.height,
+          line: s.line,
+          displayX: rect.width * 0.5,
+          displayY: groundY - 9,
+        },
+        endingTime: 0,
+        lineProgress: 0,
+        lineY: 0,
+        wipeDone: false,
+        extraDropped: false,
+        showFinalText: false,
+      };
+
+      setHud({ phase: "ready", result: "", time: 0 });
+    }
+
+    function randomLetter() {
+      return LETTERS[Math.floor(rand(0, LETTERS.length))];
+    }
+
+    function makeLetter(ch, forcedX = null, opts = {}) {
+      const g = gameRef.current;
+      const size = opts.size ?? Math.min(45, Math.max(33, g.w * 0.098));
+      const r = size * 0.44;
+      const x = forcedX ?? rand(r + 12, g.w - r - 12);
+      const y = opts.y ?? (g.titleY + 64 + rand(-86, 0));
+
+      return {
+        id: `${Date.now()}-${Math.random()}`,
+        ch,
+        x,
+        y,
+        prevX: x,
+        prevY: y,
+        vx: opts.vx ?? rand(-58, 58),
+        vy: opts.vy ?? rand(36, 92),
+        r,
+        font: size,
+        color: opts.color ?? COLORS[Math.floor(rand(0, COLORS.length))],
+        angle: rand(-0.08, 0.08),
+        av: rand(-0.85, 0.85),
+        showcase: false,
+        extra: !!opts.extra,
+        dead: false,
+      };
+    }
+
+    function startGame() {
+      const g = gameRef.current;
+      if (!g || g.phase !== "ready") return;
+
+      g.phase = "playing";
+      g.time = 0;
+      g.letters = [];
+      g.nextSpawn = 0;
+      g.spawnCount = 0;
+      g.result = "";
+      g.endingTime = 0;
+      g.lineProgress = 0;
+      g.wipeDone = false;
+      g.extraDropped = false;
+      g.showFinalText = false;
+
+      setHud({ phase: "playing", result: "", time: 0 });
+    }
+
+    function restart() {
+      newGame();
+      requestAnimationFrame(startGame);
+    }
+
+    function spawn(dt) {
+      const g = gameRef.current;
+      g.nextSpawn -= dt;
+      if (g.nextSpawn > 0) return;
+
+      const t = g.time;
+      let batch = 1;
+      let interval = 0.56;
+
+      // 正常速度：不是特别慢，也不像前一版那么密集。
+      if (t > 1.5) {
+        batch = Math.random() < 0.34 ? 2 : 1;
+        interval = 0.38;
+      }
+      if (t > 3.2) {
+        batch = Math.random() < 0.48 ? 2 : 1;
+        interval = 0.28;
+      }
+      if (t > 4.25) {
+        batch = Math.random() < 0.62 ? 2 : 3;
+        interval = 0.22;
+      }
+
+      for (let i = 0; i < batch; i++) {
+        const ch = randomLetter();
+        const letter = makeLetter(ch);
+        letter.y -= i * 48;
+        letter.vy += Math.min(170, 23 * g.spawnCount);
+        g.letters.push(letter);
+        g.spawnCount += 1;
+      }
+
+      g.nextSpawn = interval * rand(0.82, 1.22);
+    }
+
+    function basketSegments(g, useDisplay = false) {
+      const b = g.basket;
+      const x = useDisplay ? b.displayX : b.x;
+      const y = useDisplay ? b.displayY : b.y;
+      const w = b.width;
+      const h = b.height;
+
+      // U 形框：两侧外扩，底部较窄，小篮子更容易漏字。
+      return [
+        { ax: x - w / 2, ay: y, bx: x + w / 2, by: y, type: "base" },
+        { ax: x - w / 2, ay: y, bx: x - w * 0.66, by: y - h, type: "left" },
+        { ax: x + w / 2, ay: y, bx: x + w * 0.66, by: y - h, type: "right" },
+      ];
+    }
+
+    function collideCircleSegment(o, seg, restitution = 0.62, friction = 0.74) {
+      const abx = seg.bx - seg.ax;
+      const aby = seg.by - seg.ay;
+      const apx = o.x - seg.ax;
+      const apy = o.y - seg.ay;
+      const ab2 = abx * abx + aby * aby || 1;
+      const t = clamp((apx * abx + apy * aby) / ab2, 0, 1);
+      const cx = seg.ax + abx * t;
+      const cy = seg.ay + aby * t;
+
+      let nx = o.x - cx;
+      let ny = o.y - cy;
+      let d = Math.hypot(nx, ny);
+      const minD = o.r + 4.5;
+
+      if (d <= 0.0001) {
+        nx = 0;
+        ny = -1;
+        d = 1;
+      }
+
+      if (d < minD) {
+        nx /= d;
+        ny /= d;
+
+        const overlap = minD - d;
+        o.x += nx * overlap * 1.22;
+        o.y += ny * overlap * 1.22;
+
+        const vn = o.vx * nx + o.vy * ny;
+        if (vn < 0) {
+          o.vx -= (1 + restitution) * vn * nx;
+          o.vy -= (1 + restitution) * vn * ny;
+
+          const tx = -ny;
+          const ty = nx;
+          const vt = o.vx * tx + o.vy * ty;
+          o.vx -= vt * (1 - friction) * tx;
+          o.vy -= vt * (1 - friction) * ty;
+
+          // 撞到斜边后增加横向弹开/滑入效果。
+          o.vx += tx * rand(-34, 34);
+          o.av += vt * 0.015 + rand(-0.72, 0.72);
+        }
+
+        return true;
+      }
+
+      return false;
+    }
+
+    function isInsideBasket(o, g, useDisplay = false) {
+      const b = g.basket;
+      const bx = useDisplay ? b.displayX : b.x;
+      const by = useDisplay ? b.displayY : b.y;
+      return (
+        Math.abs(o.x - bx) < b.width * 0.46 &&
+        o.y > by - b.height * 1.15 &&
+        o.y < by + 15
+      );
+    }
+
+    function resolveLetterPairs(list, g) {
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const a = list[i];
+          const b = list[j];
+          if (a.dead || b.dead || a.showcase || b.showcase) continue;
+
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minD = a.r + b.r - 3.5;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= 0.0001 || d2 > minD * minD) continue;
+
+          const d = Math.sqrt(d2);
+          const nx = dx / d;
+          const ny = dy / d;
+          const overlap = minD - d;
+
+          a.x -= nx * overlap * 0.62;
+          a.y -= ny * overlap * 0.62;
+          b.x += nx * overlap * 0.62;
+          b.y += ny * overlap * 0.62;
+
+          const rvx = b.vx - a.vx;
+          const rvy = b.vy - a.vy;
+          const vn = rvx * nx + rvy * ny;
+          if (vn >= 0) continue;
+
+          const aroundBasket = isInsideBasket(a, g) || isInsideBasket(b, g);
+          const bounce = aroundBasket ? 0.94 : 0.58;
+          const impulse = -(1 + bounce) * vn / 2;
+
+          a.vx -= impulse * nx;
+          a.vy -= impulse * ny;
+          b.vx += impulse * nx;
+          b.vy += impulse * ny;
+
+          // 篮子里有字时，下一个字砸上来会明显把里面的字顶起来。
+          if (aroundBasket) {
+            a.vy -= 95;
+            b.vy -= 95;
+            a.vx += rand(-72, 72);
+            b.vx += rand(-72, 72);
+          }
+
+          a.av -= impulse * 0.018;
+          b.av += impulse * 0.018;
+        }
+      }
+    }
+
+    function extractResultFromBasket(g) {
+      const caught = g.letters
+        .filter((o) => !o.dead && !o.extra && isInsideBasket(o, g, false))
+        .sort((a, b) => a.x - b.x);
+
+      // 篮子容量变小：最多保留 4 个字作为名字。
+      const selected = caught.slice(0, RESULT_MAX_CHARS);
+
+      // 如果完全没接到，为了游戏完整性，随机给 2-3 个字，但不是固定结果。
+      if (selected.length === 0) {
+        const fallbackCount = Math.random() < 0.5 ? 2 : 3;
+        return Array.from({ length: fallbackCount }, () => randomLetter());
+      }
+
+      return selected.map((o) => o.ch);
+    }
+
+    function prepareEnding(g) {
+      g.phase = "ending";
+      g.endingTime = 0;
+      g.lineProgress = 0;
+      g.wipeDone = false;
+      g.extraDropped = false;
+      g.showFinalText = false;
+
+      const b = g.basket;
+      b.displayX = b.x;
+      b.displayY = b.y;
+
+      const resultChars = extractResultFromBasket(g);
+      g.result = resultChars.join("");
+
+      const caught = g.letters
+        .filter((o) => !o.dead && !o.extra && isInsideBasket(o, g, false))
+        .sort((a, b) => a.x - b.x)
+        .slice(0, resultChars.length);
+
+      const usedIds = new Set();
+      resultChars.forEach((char, i) => {
+        let target = caught.find((o) => o.ch === char && !usedIds.has(o.id));
+        if (!target) target = caught[i];
+
+        if (target) {
+          target.showcase = true;
+          usedIds.add(target.id);
+        } else {
+          const letter = makeLetter(char, b.x, {
+            y: b.y - 30,
+            vx: 0,
+            vy: 0,
+            size: Math.min(46, Math.max(37, g.w * 0.102)),
+          });
+          letter.showcase = true;
+          g.letters.push(letter);
+        }
+      });
+
+      const showcase = g.letters.filter((o) => o.showcase).slice(0, resultChars.length);
+      const gap = Math.min(37, Math.max(30, g.w * 0.085));
+      const start = -((showcase.length - 1) * gap) / 2;
+
+      showcase.forEach((o, i) => {
+        o.ch = resultChars[i];
+        o.font = Math.min(49, Math.max(37, g.w * 0.106));
+        o.r = o.font * 0.42;
+        o.color = COLORS[(i * 4 + 2) % COLORS.length];
+        o.showcase = {
+          dx: start + i * gap,
+          dy: -b.height * 0.48,
+        };
+      });
+
+      setHud({ phase: "ending", result: g.result, time: g.time });
+    }
+
+    function update(dt) {
+      const g = gameRef.current;
+      if (!g) return;
+      dt = Math.min(dt, 1 / 24);
+
+      const b = g.basket;
+      const s = basketSize(g.w, g.h);
+      b.width = s.width;
+      b.height = s.height;
+      b.line = s.line;
+
+      b.x += (b.targetX - b.x) * Math.min(1, dt * 15);
+      b.x = clamp(b.x, b.width / 2 + 24, g.w - b.width / 2 - 24);
+
+      if (g.phase === "playing") {
+        g.time += dt;
+        spawn(dt);
+        if (g.time >= PLAY_SECONDS) prepareEnding(g);
+      }
+
+      if (g.phase === "ending") {
+        g.endingTime += dt;
+
+        // 5 秒结束后篮子抬到中央偏下。
+        const liftEase = easeOutBack(g.endingTime / 0.76);
+        b.displayX = b.x + (g.w * 0.5 - b.x) * liftEase;
+        b.displayY = b.y + (g.h * 0.565 - b.y) * liftEase;
+
+        // 横线和篮子上沿高度基本持平。
+        g.lineY = b.displayY - b.height * 1.02;
+
+        // 从右边滑出一根线。
+        if (g.endingTime > 0.48) {
+          g.lineProgress = clamp((g.endingTime - 0.48) / 0.46, 0, 1);
+        }
+
+        // 线扫过后，删除篮子以上的字，保留底部没接住的字堆。
+        if (!g.wipeDone && g.lineProgress > 0.76) {
+          g.wipeDone = true;
+          g.letters.forEach((o) => {
+            if (!o.showcase && o.y < g.lineY + 5) o.dead = true;
+          });
+        }
+
+        // 清场后额外掉一个“多余字”，撞线/撞篮子/撞地面后弹开。
+        if (!g.extraDropped && g.lineProgress > 0.92) {
+          g.extraDropped = true;
+          const extra = makeLetter(randomLetter(), b.displayX + b.width * 0.92, {
+            y: g.lineY - 126,
+            vx: -115,
+            vy: 75,
+            size: Math.min(47, Math.max(35, g.w * 0.102)),
+            color: COLORS[Math.floor(rand(0, COLORS.length))],
+            extra: true,
+          });
+          g.letters.push(extra);
+        }
+
+        if (g.endingTime > 1.6) {
+          g.showFinalText = true;
+        }
+      }
+
+      const gravity = g.phase === "ending" ? 1120 : 1180;
+      const segs = basketSegments(g, g.phase === "ending");
+
+      for (const o of g.letters) {
+        if (o.dead) continue;
+
+        o.prevX = o.x;
+        o.prevY = o.y;
+
+        if (g.phase === "ending" && o.showcase) {
+          const targetX = b.displayX + o.showcase.dx;
+          const targetY = b.displayY + o.showcase.dy;
+          o.x += (targetX - o.x) * Math.min(1, dt * 13);
+          o.y += (targetY - o.y) * Math.min(1, dt * 13);
+          o.vx = 0;
+          o.vy = 0;
+          o.angle *= 0.9;
+          continue;
+        }
+
+        o.vy += gravity * dt;
+        o.vx *= Math.pow(0.993, dt * 60);
+        o.vy *= Math.pow(0.999, dt * 60);
+        o.x += o.vx * dt;
+        o.y += o.vy * dt;
+        o.angle += o.av * dt;
+        o.angle = clamp(o.angle, -0.24, 0.24);
+        o.av *= Math.pow(0.93, dt * 60);
+
+        if (o.x - o.r < 6) {
+          o.x = o.r + 6;
+          o.vx = Math.abs(o.vx) * 0.62;
+        }
+        if (o.x + o.r > g.w - 6) {
+          o.x = g.w - o.r - 6;
+          o.vx = -Math.abs(o.vx) * 0.62;
+        }
+
+        // 地面反弹更明显：落地弹起一小段，再带阻尼滑动停下。
+        if (o.y + o.r > g.groundY) {
+          o.y = g.groundY - o.r;
+          if (Math.abs(o.vy) > 30) {
+            o.vy = -o.vy * (o.extra ? 0.56 : 0.48);
+            o.vx += rand(-54, 54);
+            o.av += rand(-1.1, 1.1);
+          } else {
+            o.vy = 0;
+          }
+          o.vx *= 0.83;
+          o.av *= 0.72;
+        }
+
+        // 结算横线也有碰撞，额外字碰到线会弹开。
+        if (g.phase === "ending" && g.lineProgress > 0.72 && o.extra) {
+          const lineStartX = g.w - g.w * g.lineProgress;
+          const hitLine =
+            o.x > lineStartX &&
+            o.y + o.r > g.lineY - 3 &&
+            o.y - o.r < g.lineY + 8;
+
+          if (hitLine) {
+            o.y = g.lineY - o.r - 5;
+            o.vy = -Math.abs(o.vy) * 0.62 - 92;
+            o.vx += rand(-100, 20);
+            o.av += rand(-1.6, 1.6);
+          }
+        }
+
+        const basketX = g.phase === "ending" ? b.displayX : b.x;
+        const basketY = g.phase === "ending" ? b.displayY : b.y;
+        const nearBasket =
+          o.y + o.r > basketY - b.height - 38 &&
+          o.y - o.r < basketY + 34 &&
+          Math.abs(o.x - basketX) < b.width * 1.05;
+
+        if (nearBasket) {
+          for (const s of segs) {
+            collideCircleSegment(o, s, o.extra ? 0.68 : 0.62, 0.72);
+          }
+        }
+      }
+
+      const activeLetters = g.letters.filter((o) => !o.dead);
+      for (let k = 0; k < 4; k++) resolveLetterPairs(activeLetters, g);
+
+      // 保留地面字堆、展示字、额外字；限制数量避免卡顿。
+      g.letters = g.letters.filter((o, idx) => {
+        if (o.dead) return false;
+        if (o.showcase || o.extra) return true;
+        return idx > g.letters.length - 70;
+      });
+    }
+
+    function drawTextSticker(text, x, y, fontSize, fill, angle = 0, align = "center") {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.textAlign = align;
+      ctx.textBaseline = "middle";
+      ctx.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ctx.shadowColor = "rgba(0,0,0,0.84)";
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetY = 3;
+
+      ctx.lineWidth = Math.max(8, fontSize * 0.2);
+      ctx.strokeStyle = "rgba(0,0,0,0.92)";
+      ctx.strokeText(text, 0, 0);
+
+      ctx.lineWidth = Math.max(5, fontSize * 0.13);
+      ctx.strokeStyle = "#ffffff";
+      ctx.strokeText(text, 0, 0);
+
+      ctx.fillStyle = fill;
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+    }
+
+    function drawBasket(g, useDisplay = false) {
+      const segs = basketSegments(g, useDisplay);
+      ctx.save();
+      ctx.lineCap = "butt";
+      ctx.lineJoin = "miter";
+      ctx.lineWidth = g.basket.line;
+      ctx.strokeStyle = "#ffc178";
+      ctx.shadowColor = "rgba(255, 193, 120, 0.35)";
+      ctx.shadowBlur = 5;
+
+      ctx.beginPath();
+      ctx.moveTo(segs[1].bx, segs[1].by);
+      ctx.lineTo(segs[1].ax, segs[1].ay);
+      ctx.lineTo(segs[0].bx, segs[0].by);
+      ctx.lineTo(segs[2].bx, segs[2].by);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawTitle(g) {
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `900 ${Math.min(46, g.w * 0.11)}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      ctx.lineJoin = "round";
+      ctx.shadowColor = "rgba(0,0,0,0.96)";
+      ctx.shadowBlur = 9;
+      ctx.shadowOffsetY = 3;
+
+      ctx.lineWidth = 10;
+      ctx.strokeStyle = "#000";
+      ctx.strokeText("前世我叫什么", g.w / 2, g.titleY);
+
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = "#ffffff";
+      ctx.strokeText("前世我叫什么", g.w / 2, g.titleY);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("前世我叫什么", g.w / 2, g.titleY);
+      ctx.restore();
+    }
+
+    function drawFinalLabel(g) {
+      const b = g.basket;
+      const labelY = b.displayY - b.height * 1.9;
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `900 ${Math.min(29, g.w * 0.068)}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "#000";
+      ctx.strokeText("我的前世名字是", g.w / 2, labelY);
+      ctx.fillStyle = "#ffd29a";
+      ctx.fillText("我的前世名字是", g.w / 2, labelY);
+      ctx.restore();
+    }
+
+    function drawResultText(g) {
+      if (!g.showFinalText || !g.result) return;
+
+      const b = g.basket;
+      const y = b.displayY + b.height * 0.72;
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `900 ${Math.min(25, g.w * 0.06)}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "#000";
+      ctx.strokeText(g.result, g.w / 2, y);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(g.result, g.w / 2, y);
+      ctx.restore();
+    }
+
+    function draw() {
+      const g = gameRef.current;
+      if (!g) return;
+
+      ctx.clearRect(0, 0, g.w, g.h);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, g.w, g.h);
+
+      const grad = ctx.createLinearGradient(0, g.titleY - 95, 0, g.titleY - 35);
+      grad.addColorStop(0, "rgba(255,255,255,0.06)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, g.titleY - 100, g.w, 82);
+
+      drawTitle(g);
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(210,210,210,0.82)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(18, g.groundY + 1);
+      ctx.lineTo(g.w - 18, g.groundY + 1);
+      ctx.stroke();
+      ctx.restore();
+
+      for (const o of g.letters) {
+        if (o.showcase || o.dead) continue;
+        drawTextSticker(o.ch, o.x, o.y, o.font, o.color, o.angle);
+      }
+
+      drawBasket(g, g.phase === "ending");
+
+      // 从右边滑出的横线：高度与篮子上沿持平，用来切掉篮子以上的多余字。
+      if (g.phase === "ending" && g.lineProgress > 0.01) {
+        const x0 = g.w - g.w * g.lineProgress;
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 213, 157, 0.96)";
+        ctx.lineWidth = 4;
+        ctx.shadowColor = "rgba(255, 193, 120, 0.78)";
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(x0, g.lineY);
+        ctx.lineTo(g.w + 8, g.lineY);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (g.phase === "ending" && g.showFinalText) {
+        drawFinalLabel(g);
+      }
+
+      for (const o of g.letters) {
+        if (!o.showcase || o.dead) continue;
+        drawTextSticker(o.ch, o.x, o.y, o.font, o.color, o.angle);
+      }
+
+      if (g.phase === "ending" && g.showFinalText) {
+        drawResultText(g);
+      }
+
+      if (g.phase === "ready") {
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = `700 ${Math.min(18, g.w * 0.045)}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        ctx.fillStyle = "rgba(255,255,255,0.72)";
+        ctx.fillText("拖动小篮子，5秒内接住掉下来的字", g.w / 2, g.h * 0.54);
+        ctx.font = `900 ${Math.min(30, g.w * 0.075)}px system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        ctx.fillStyle = "#ffc178";
+        ctx.fillText("点击开始", g.w / 2, g.h * 0.6);
+        ctx.restore();
+      }
+    }
+
+    function tick(now) {
+      const dt = (now - last) / 1000;
+      last = now;
+
+      update(dt);
+      draw();
+
+      hudTimer += dt;
+      const g = gameRef.current;
+      if (g && hudTimer > 0.15) {
+        hudTimer = 0;
+        setHud((prev) => {
+          if (prev.phase === g.phase && prev.result === g.result && Math.abs(prev.time - g.time) < 0.12) {
+            return prev;
+          }
+          return { phase: g.phase, result: g.result, time: g.time };
+        });
+      }
+
+      raf = requestAnimationFrame(tick);
+    }
+
+    function pointerX(e) {
+      const rect = canvas.getBoundingClientRect();
+      return e.clientX - rect.left;
+    }
+
+    const onPointerDown = (e) => {
+      e.preventDefault();
+      const g = gameRef.current;
+      if (!g) return;
+
+      if (g.phase === "ready") startGame();
+      else if (g.phase === "ending") restart();
+
+      if (g.phase === "playing") {
+        g.pointerDown = true;
+        g.basket.targetX = pointerX(e);
+      }
+    };
+
+    const onPointerMove = (e) => {
+      const g = gameRef.current;
+      if (!g || g.phase !== "playing") return;
+      if (!g.pointerDown && e.buttons !== 1) return;
+
+      e.preventDefault();
+      g.basket.targetX = pointerX(e);
+    };
+
+    const onPointerUp = () => {
+      const g = gameRef.current;
+      if (g) g.pointerDown = false;
+    };
+
+    const onKey = (e) => {
+      const g = gameRef.current;
+      if (!g) return;
+
+      if (e.code === "Space" || e.code === "Enter") {
+        if (g.phase === "ready") startGame();
+        else if (g.phase === "ending") restart();
+      }
+
+      if (g.phase !== "playing") return;
+      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") g.basket.targetX -= 40;
+      if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") g.basket.targetX += 40;
+    };
+
+    newGame();
+    resize();
+
+    window.addEventListener("resize", resize);
+    window.addEventListener("keydown", onKey);
+    canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerUp);
+
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("keydown", onKey);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen w-full bg-neutral-950 flex items-center justify-center p-3 select-none">
+      <div className="relative w-full max-w-[430px] aspect-[1180/2556] max-h-[92vh] rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl bg-black">
+        <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
+
+        <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between px-4 py-3 text-white/80 text-sm pointer-events-none">
+          <span className="font-semibold">复刻版 Demo</span>
+          <span>
+            {hud.phase === "playing"
+              ? `${Math.max(0, PLAY_SECONDS - hud.time).toFixed(1)}s`
+              : hud.phase === "ending"
+                ? "结算"
+                : "待开始"}
+          </span>
+        </div>
+
+        {hud.phase === "ending" && (
+          <button
+            className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/12 px-5 py-2 text-sm font-bold text-white backdrop-blur-md border border-white/20 active:scale-95"
+            onClick={(e) => {
+              e.stopPropagation();
+              const ev = new KeyboardEvent("keydown", { code: "Enter" });
+              window.dispatchEvent(ev);
+            }}
+          >
+            再玩一次：{hud.result || "随机名字"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
